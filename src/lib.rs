@@ -2,6 +2,7 @@ extern crate embedded_hal;
 
 use embedded_hal::digital::v2::OutputPin;
 
+#[derive(Clone, Copy)]
 pub struct VirtualPinOutput {
     state: bool
 }
@@ -26,64 +27,57 @@ impl OutputPin for VirtualPinOutput {
     }
 }
 
-pub struct MultiplexPinOutput2By2<P1, P2, P3, P4> {
-    vgpio: [VirtualPinOutput; 4],
-
-    row: usize,
-
-    p1: P1,
-    p2: P2,
-    p3: P3,
-    p4: P4
-}
-
-impl <P1, P2, P3, P4> MultiplexPinOutput2By2<P1, P2, P3, P4> where P1: OutputPin, P2: OutputPin, P3: OutputPin, P4: OutputPin {
-    pub fn new(p1: P1, p2: P2, p3: P3, p4: P4) -> Self {
-        let vgpio: [VirtualPinOutput; 4] = [
-            VirtualPinOutput::new(),
-            VirtualPinOutput::new(),
-            VirtualPinOutput::new(),
-            VirtualPinOutput::new()
-        ];
-
-        let row = 0;
-
-        MultiplexPinOutput2By2 {
-            vgpio, row, p1, p2, p3, p4
-        }
-    }
-
-    pub fn virtual_outputs(&mut self) -> &mut [VirtualPinOutput] {
-        &mut self.vgpio
-    }
-
-    pub fn update_display(&mut self) {
-        self.set_all_low();
-
-        if self.row == 0 {
-            self.p1.set_high();
-        } else {
-            self.p2.set_high();
+macro_rules! define_multiplex {
+    ($name:ident, $rows:expr, $cols:expr,
+     row_names [$($r_index:expr => [$r_name:ident, $r_type:ident]),*],
+     col_names [$($c_index:expr => [$c_name:ident, $c_type:ident]),*]) => {
+        pub struct $name<$( $r_type, )* $( $c_type, )*> {
+            vgpio: [VirtualPinOutput; ($rows * $cols)],
+            row: usize,
+            $( $r_name: $r_type, )*
+            $( $c_name: $c_type, )*
         }
 
-        let pin_offset = 2 * self.row;
-        if self.vgpio[pin_offset].state {
-            self.p3.set_high();
+        impl <$( $r_type, )* $( $c_type, )*> $name<$( $r_type, )* $( $c_type, )*>
+            where $( $r_type: OutputPin, )* $( $c_type: OutputPin, )* {
+            pub fn new($( $r_name: $r_type, )* $( $c_name: $c_type, )*) -> Self {
+                let vgpio: [VirtualPinOutput; ($rows * $cols)] = [VirtualPinOutput::new(); ($rows * $cols)];
+
+                Self {
+                    vgpio, row: 0, $( $r_name, )* $( $c_name, )*
+                }
+            }
+
+            pub fn virtual_outputs(&mut self) -> &mut [VirtualPinOutput] {
+                &mut self.vgpio
+            }
+
+            pub fn update_display(&mut self) {
+                self.set_all_low();
+
+                $( if self.row == $r_index { self.$r_name.set_high(); } )*
+
+                let pin_offset = $cols * self.row;
+
+                $(
+                    if self.vgpio[pin_offset + $c_index].state {
+                        self.$c_name.set_high();
+                    }
+                )*
+
+                // Iterate and wrap around if needed
+                self.row += 1;
+                if self.row == $rows {
+                    self.row = 0;
+                }
+            }
+
+            pub fn set_all_low(&mut self) {
+                $(self.$r_name.set_low();)*
+                $(self.$c_name.set_low();)*
+            }
         }
-
-        if self.vgpio[pin_offset + 1].state {
-            self.p4.set_high();
-        }
-
-        self.row = if self.row == 1 { 0 } else { 1 };
-    }
-
-    pub fn set_all_low(&mut self) {
-        self.p1.set_low();
-        self.p2.set_low();
-        self.p3.set_low();
-        self.p4.set_low();
-    }
+    };
 }
 
 #[cfg(test)]
@@ -91,7 +85,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
+    fn test_2_by_2() {
+        define_multiplex!(
+            MultiplexPinOutput2By2, 2, 2,
+            row_names [
+                0 => [p1, P1],
+                1 => [p2, P2]
+            ],
+            col_names [
+                0 => [p3, P3],
+                1 => [p4, P4]
+            ]
+        );
+
         let mut multiplexed = MultiplexPinOutput2By2::new(
             VirtualPinOutput::new(),
             VirtualPinOutput::new(),
@@ -100,6 +106,7 @@ mod tests {
         );
 
         let pins = multiplexed.virtual_outputs();
+        assert_eq!(pins.len(), 4);
         pins[0].set_high();
 
         assert_eq!(multiplexed.p1.state, false);
@@ -121,4 +128,73 @@ mod tests {
         assert_eq!(multiplexed.p3.state, false);
         assert_eq!(multiplexed.p4.state, false);
     }
+
+    #[test]
+    fn test_4_by_4() {
+        define_multiplex!(
+            MultiplexPinOutput4By4, 4, 4,
+            row_names [
+                0 => [p1, P1],
+                1 => [p2, P2],
+                2 => [p3, P3],
+                3 => [p4, P4]
+            ],
+            col_names [
+                0 => [p5, P5],
+                1 => [p6, P6],
+                2 => [p7, P7],
+                3 => [p8, P8]
+            ]
+        );
+
+        let mut multiplexed = MultiplexPinOutput4By4::new(
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new(),
+            VirtualPinOutput::new()
+        );
+
+        let pins = multiplexed.virtual_outputs();
+        assert_eq!(pins.len(), 16);
+
+        pins[0].set_high();
+        pins[1].set_high();
+
+        assert_eq!(multiplexed.p1.state, false);
+        assert_eq!(multiplexed.p2.state, false);
+        assert_eq!(multiplexed.p3.state, false);
+        assert_eq!(multiplexed.p4.state, false);
+        assert_eq!(multiplexed.p5.state, false);
+        assert_eq!(multiplexed.p6.state, false);
+        assert_eq!(multiplexed.p7.state, false);
+        assert_eq!(multiplexed.p8.state, false);
+
+        multiplexed.update_display();
+
+        assert_eq!(multiplexed.p1.state, true);
+        assert_eq!(multiplexed.p2.state, false);
+        assert_eq!(multiplexed.p3.state, false);
+        assert_eq!(multiplexed.p4.state, false);
+        assert_eq!(multiplexed.p5.state, true);
+        assert_eq!(multiplexed.p6.state, true);
+        assert_eq!(multiplexed.p7.state, false);
+        assert_eq!(multiplexed.p8.state, false);
+
+        multiplexed.update_display();
+
+        assert_eq!(multiplexed.p1.state, false);
+        assert_eq!(multiplexed.p2.state, true);
+        assert_eq!(multiplexed.p3.state, false);
+        assert_eq!(multiplexed.p4.state, false);
+        assert_eq!(multiplexed.p5.state, false);
+        assert_eq!(multiplexed.p6.state, false);
+        assert_eq!(multiplexed.p7.state, false);
+        assert_eq!(multiplexed.p8.state, false);
+    }
 }
+
+
